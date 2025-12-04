@@ -16,30 +16,40 @@ type AuditResult = {
   explanation?: string;
 };
 
-// --- Mocked LLM Call (to show integration point) ---
-// Assume this function exists and uses the AI_API_KEY
+// --- LLM Call Placeholder (Replaces Mocked Function) ---
 const callLLMForExplanation = async (data: any, auditResult: AuditResult): Promise<string> => {
-    // In a real implementation, load the prompt template from ai/prompts/fairness_explain.prompt.md
-    // and instruct the LLM (Gemini/GPT) to generate a concise, human-friendly explanation
-    // based on the parsed data and the rules triggered in auditResult.
-
     const score = Math.round(auditResult.fairnessScore * 100);
 
+    // --- TODO: INSERT REAL LLM API CALL LOGIC HERE ---
+    // 1. Use the prompt template from ai/prompts/fairness_explain.prompt.md
+    // 2. Instruct the LLM (e.g., Gemini) to generate a concise, human-friendly explanation
+    //    based on the parsed data and the rules triggered in auditResult.
+
+    if (process.env.AI_API_KEY) {
+        // Placeholder for real LLM call
+        console.warn("LLM Explanation call not implemented. Using fallback.");
+    }
+    
+    // Fallback explanation logic (now the primary for the MVP)
     let explanation = `The earnings audit resulted in a Fairness Score of ${score}%.`;
 
     if (auditResult.missingAmount && auditResult.missingAmount > 0.01) {
-        explanation += ` There is a significant unexplained difference of ${auditResult.missingAmount.toFixed(2)} between the total earnings and the sum of base, bonus, and other specified components.`;
+        explanation += ` There is a significant unexplained difference of ₹${auditResult.missingAmount.toFixed(2)} between the total earnings and the sum of base, bonus, and other specified components. This discrepancy requires further investigation.`;
     }
     if (auditResult.penaltyMismatch) {
-        explanation += ` A large penalty of ${(data.penalties || []).reduce((s: number, p: any) => s + (p.amount || 0), 0).toFixed(2)} was applied, which exceeds the threshold of 20% of total earnings.`;
+        const totalPenalty = (data.penalties || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
+        explanation += ` A large penalty of ₹${totalPenalty.toFixed(2)} was applied, which exceeds the acceptable threshold (20% of gross earnings). This is flagged as a potential non-compliance issue.`;
     }
     if (auditResult.ratingIssue) {
-        explanation += ` A recent rating drop was detected, which may indicate a platform-side issue or a potential de-prioritization risk.`;
+        explanation += ` A low recent rating was detected (below 4.5), which may indicate a risk of de-prioritization by the platform.`;
+    }
+    if (score === 100) {
+        explanation = "The earnings record appears to be fully compliant with the established fairness rules. No significant discrepancies or non-compliant penalties were detected.";
     }
 
     return explanation.trim();
 };
-// --- End Mocked LLM Call ---
+// --- End LLM Call Placeholder ---
 
 
 /**
@@ -56,20 +66,19 @@ export const fairnessEngine = {
   async auditEarnings(parsedData: any, context: any = {}): Promise<AuditResult> {
     const result: AuditResult = { fairnessScore: 1.0 }; // Start at 1.0 (perfectly fair)
     const total = parsedData.total ?? 0;
+    // Calculate components: basePay + bonus + distancePay
     const components = (parsedData.basePay ?? 0) + (parsedData.bonus ?? 0) + (parsedData.distancePay ?? 0);
     const totalPenalty = (parsedData.penalties || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
 
     try {
       // 1. Rule: Missing Amount Check (Components vs. Total)
-      // Calculate missing amount (Total - Components + Penalties). Use a small epsilon for floating point safety.
-      // We expect: total ≈ components - totalPenalty
-      // Therefore, the difference (which we interpret as 'missing') should be near zero.
+      // Expected Total = Gross Components - Total Penalty
+      // Difference = Reported Total - Expected Total
       const expectedTotal = components - totalPenalty;
-      // We check the absolute difference between the reported total and the expected total from components.
       const difference = total - expectedTotal;
 
       // Only track positive difference as 'missing' (underpayment/unexplained fee). Use tolerance of 0.1
-      const missing = Math.max(0, difference - 0.1);
+      const missing = Math.max(0, difference - 0.1); 
       result.missingAmount = missing;
 
       // Severity 1: If missing amount is > 5% of total, reduce score significantly
@@ -88,38 +97,28 @@ export const fairnessEngine = {
         result.fairnessScore -= 0.3; // Moderate deduction
       }
 
-      // 3. Rule: Recent Rating Drop Detection
+      // 3. Rule: Recent Rating Check (Simplified for MVP single snapshot)
       const ratings = parsedData.ratings || [];
       result.ratingIssue = false;
-      if (ratings.length >= 2) {
-        // Compare the most recent rating to the one before it
-        const last = ratings[ratings.length - 1].rating;
-        const prev = ratings[ratings.length - 2].rating;
+      
+      if (ratings.length >= 1) {
+        const lastRating = ratings[ratings.length - 1].rating;
 
-        // Arbitrary threshold: drop of 0.3 points or more (e.g., 4.9 -> 4.5)
-        if (prev && last && (prev - last) > 0.3) {
+        // Arbitrary threshold: flag if the last known rating is below 4.5
+        if (lastRating && lastRating < 4.5) {
           result.ratingIssue = true;
           result.fairnessScore -= 0.2; // Minor deduction
         }
+        // NOTE: The previous logic for rating drop (comparing two ratings) requires historical data
+        // and is disabled for this MVP single-screenshot flow.
       }
 
       // Clamp score between 0 and 1
       result.fairnessScore = Math.max(0, Math.min(1, result.fairnessScore));
 
       // 4. Explanation Generation
-      if (process.env.AI_API_KEY) {
-        // Use the LLM to synthesize the findings into a clear, non-technical explanation.
-        result.explanation = await callLLMForExplanation(parsedData, result);
-      } else {
-        // Fallback explanation for environments without AI key
-        result.explanation = `
-          AUTOMATED AUDIT REPORT:
-          Score: ${Math.round(result.fairnessScore * 100)}%.
-          Missing Funds: ${result.missingAmount && result.missingAmount > 0.01 ? `₹${result.missingAmount.toFixed(2)} unexplained.` : "None detected."}
-          Penalty Check: ${result.penaltyMismatch ? `Excessive penalty detected (₹${totalPenalty.toFixed(2)}).` : "Penalty acceptable."}
-          Rating Drop: ${result.ratingIssue ? "Recent rating decline detected." : "No significant rating change."}
-        `.trim().replace(/\s+/g, ' ');
-      }
+      // Call the LLM (or the fallback function) to synthesize findings.
+      result.explanation = await callLLMForExplanation(parsedData, result);
 
       return result;
 

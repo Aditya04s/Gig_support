@@ -34,26 +34,30 @@ type ParsedData = {
   rawText?: string;
 };
 
-// --- Mocked LLM Call (to show integration point) ---
-// Assume this function exists and uses the AI_API_KEY
+// --- LLM Call Placeholder (Replaces Mocked Function) ---
 const callLLMForParsing = async (text: string): Promise<Partial<ParsedData> | null> => {
-    // In a real implementation, load the prompt template from ai/prompts/parse_earnings.prompt.md
-    // const prompt = fs.readFileSync('ai/prompts/parse_earnings.prompt.md', 'utf-8')
-    // and instruct the LLM (Gemini/GPT) to return a clean JSON object.
+    const AI_API_KEY = process.env.AI_API_KEY;
 
-    console.log("Calling LLM for refinement...");
+    if (!AI_API_KEY) {
+        // Fallback or warning if key is missing (handled by the surrounding logic, but good practice)
+        return null; 
+    }
 
-    // Mock LLM response to demonstrate merging/overriding
-    return {
-        total: 420.0,
-        basePay: 250.0,
-        bonus: 100.0,
-        distancePay: 20.0, // LLM found an extra field
-        date: "2025-12-05", // LLM standardized the date
-        penalties: [{ type: "fine", amount: 50.0 }], // LLM structured the penalty better
-    };
+    console.log("Calling LLM for data parsing and refinement...");
+    
+    // --- TODO: INSERT REAL LLM API CALL LOGIC HERE ---
+    // 1. Load the prompt template from ai/prompts/parse_earnings.prompt.md
+    // 2. Instruct the LLM (e.g., Gemini) with the prompt and the raw OCR text.
+    // 3. Ensure the LLM returns the structured JSON output as defined in the prompt.
+    // 4. Parse the JSON response and return it.
+
+    // For now, since the service logic must proceed, we return null, 
+    // relying only on the regex heuristics if the real call is not implemented.
+    // If the real call fails, it should also return null or throw an exception.
+    
+    return null;
 };
-// --- End Mocked LLM Call ---
+// --- End LLM Call Placeholder ---
 
 /**
  * Service responsible for converting raw OCR text into structured earnings data.
@@ -78,8 +82,9 @@ export const parserService = {
     /** Utility to extract a number from a string, stripping common currency/separator characters. */
     const numFrom = (s: string): number | null => {
       // Remove commas, currency symbols ($, ₹, Rs, £), and look for a number
-      const m = s.replace(/[,₹Rs$£]/g, "").match(/(\d+(\.\d{1,2})?)/);
-      return m ? Number(m[1]) : null;
+      // FIX: Use optional grouping for the decimal part to catch whole numbers
+      const m = s.replace(/[,₹Rs$£]/g, "").match(/(-?\s*\d+(\.\d{1,2})?)/);
+      return m ? Number(m[1].replace(/\s/g, '')) : null; // Remove space before converting to number
     };
 
     try {
@@ -95,19 +100,17 @@ export const parserService = {
         }
 
         // Dates
-        if (!out.date && low.includes("date")) {
-            // Regex for YYYY-MM-DD, MM/DD/YYYY, or DD/MM/YYYY formats
+        if (!out.date && low.match(/date|period|week/i)) {
+            // Regex for common date formats (YYYY-MM-DD, MM/DD/YYYY, or DD/MM/YYYY)
             const dateMatch = l.match(/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/);
             if (dateMatch) {
-                // TODO: Need robust date normalization (e.g., moment.js or native date parsing)
+                // Simplistic assumption: use the matched string without robust normalization
                 out.date = dateMatch[0];
             }
         }
 
         // Financials (use `?? out.field` to ensure the first successful extraction is kept)
-        if (low.match(/total|earned|net/i)) {
-          out.total = numFrom(l) ?? out.total;
-        }
+        // Check for 'total' last to prioritize base/bonus if they are found first in a clean line.
         if (low.match(/base pay|basic|rate/i)) {
           out.basePay = numFrom(l) ?? out.basePay;
         }
@@ -117,16 +120,24 @@ export const parserService = {
         if (low.match(/distanc|fuel|mileage/i)) {
           out.distancePay = numFrom(l) ?? out.distancePay;
         }
+        if (low.match(/total|earned|net payable/i)) {
+          // Total is usually the net amount
+          out.total = numFrom(l) ?? out.total;
+        }
         
         // Penalties/Deductions
         if (low.match(/penalt|deduct|surcharge|fine/i)) {
           const amt = numFrom(l);
           if (amt !== null) {
-            out.penalties!.push({ type: l.split(":")[0]?.trim() || "deduction", amount: amt });
+            // Penalties should be stored as positive amounts, even if extracted with a negative sign
+            out.penalties!.push({ 
+                type: l.split(":")[0]?.trim() || "Deduction", 
+                amount: Math.abs(amt) 
+            });
           }
         }
 
-        // Ratings (Simple extraction: look for X.X/5 or similar)
+        // Ratings
         if (low.match(/rating|feedback/i)) {
             const ratingMatch = l.match(/(\d\.\d|\d)\/\d/);
             if (ratingMatch) {
@@ -137,7 +148,6 @@ export const parserService = {
 
       // --- 2. LLM Refinement Pass (Optional) ---
       if (process.env.AI_API_KEY) {
-        // This is where you call the LLM to take the raw text and return a canonical JSON object
         const llmResult = await callLLMForParsing(rawText);
 
         if (llmResult) {
@@ -151,8 +161,8 @@ export const parserService = {
       }
 
       // 3. Post-processing/Cleanup (e.g., calculating total if missing)
-      if (!out.total && out.basePay !== undefined && out.bonus !== undefined && out.penalties) {
-          const totalPenalties = out.penalties.reduce((sum, p) => sum + p.amount, 0);
+      if (!out.total && out.basePay !== undefined && out.bonus !== undefined) {
+          const totalPenalties = out.penalties ? out.penalties.reduce((sum, p) => sum + p.amount, 0) : 0;
           out.total = (out.basePay + out.bonus + (out.distancePay ?? 0)) - totalPenalties;
           // Note: This calculation is heuristic and may not be accurate.
       }

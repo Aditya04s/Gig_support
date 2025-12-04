@@ -1,48 +1,12 @@
 // backend/routes/audit.ts
 import { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "../utils/dbConnect";
+import { fairnessEngine } from "../services/fairnessEngine"; // Import the actual service
 
-// --- Mocked Services and Models for illustration ---
-// TODO: Ensure these imports point to your actual files
-// Assume fairnessEngine: { auditEarnings: (parsedData: any, context?: any) => Promise<{ fairnessScore: number, missingAmount?: number, penaltyMismatch?: boolean, ratingIssue?: boolean, explanation: string }> }
-import { fairnessEngine } from "../services/fairnessEngine";
-// Assume EarningsRecord: { findById: (id: string) => { lean: () => Promise<{ _id: string, parsedData: any } | null> } }
-// import EarningsRecord from "../models/EarningsRecord";
-const EarningsRecord = {
-    findById: (id: string) => ({
-        lean: async () => {
-            console.log(`Mock DB Lookup EarningsRecord by ID: ${id}`);
-            if (id.startsWith("mock_record_")) {
-                return {
-                    _id: id,
-                    parsedData: {
-                        platform: "mock_platform",
-                        earnings: 100,
-                        hours: 5,
-                        rate: 20,
-                        context: { userTier: "Gold" }
-                    }
-                };
-            }
-            return null;
-        }
-    })
-};
-// Assume AuditResultModel: { create: (data: any) => Promise<{ _id: string, [key: string]: any }> }
-// import AuditResultModel from "../models/AuditResult";
-const AuditResultModel = {
-    create: async (data: any) => {
-        console.log("Mock DB Save AuditResult:", data);
-        return {
-            _id: "mock_audit_" + Date.now(),
-            ...data
-        };
-    }
-};
-// Assume dbConnect: () => Promise<void>
-// import dbConnect from "../utils/dbConnect";
-const dbConnect = async () => { console.log("Mock DB Connect"); };
-// --- End Mocked Services and Models ---
+// --- REAL IMPORTS ---
+import EarningsRecord from "../models/EarningsRecord"; // Import the actual EarningsRecord model
+import AuditResultModel from "../models/AuditResult"; // Import the actual AuditResult model
+// --- End REAL IMPORTS ---
 
 // Define the expected request body types for clarity
 interface AuditRequestBody {
@@ -68,24 +32,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let parsed = parsedData;
 
         // 1. Load data if recordId is provided
-        if (!parsed && recordId) {
+        if (recordId) {
+            // FindById is safer than relying solely on the parsedData from the FE
             const record = await EarningsRecord.findById(recordId).lean();
 
             if (!record) {
                 return res.status(404).json({ error: `EarningsRecord with ID ${recordId} not found.` });
             }
             
-            // Extract the parsedData from the stored record
-            parsed = record.parsedData;
-        }
-
-        // 2. Validate data presence
-        if (!parsed || Object.keys(parsed).length === 0) {
+            // Prioritize the data stored in the DB, but allow FE to override with minor corrections.
+            // Merge the two, prioritizing the explicitly provided `parsedData` (from FE review)
+            parsed = {
+                ...(record.parsedData || {}),
+                ...(parsedData || {})
+            };
+        } else if (!parsed || Object.keys(parsed).length === 0) {
+             // 2. Validate data presence if no recordId was given
             return res.status(400).json({ error: "No parsed data found or provided for audit." });
         }
 
+
         // 3. Call Fairness Engine
-        // Use the parsed data and any optional context provided in the body
         const auditResult = await fairnessEngine.auditEarnings(parsed, context);
 
         // 4. Persist Audit Result
@@ -99,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             penaltyMismatch: auditResult.penaltyMismatch ?? false,
             ratingIssue: auditResult.ratingIssue ?? false,
             explanation: auditResult.explanation,
-            createdAt: new Date(),
+            // createdAt and updatedAt are handled by the Mongoose schema `timestamps: true`
         });
 
         // 5. Return Audit Result

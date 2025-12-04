@@ -1,69 +1,154 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
-// Define a structured interface for the data we expect to review and edit
+// Define the penalty structure from the backend
+interface Penalty {
+  type?: string;
+  amount: number;
+}
+
+// Define the structured interface for the data we expect to review and edit
+// This MUST align with the backend's ParsedData and the audit route's expectation
 interface ExtractedData {
-  platform: string; // The selected platform (e.g., 'swiggy')
-  dateRange: string; // The period covered by the screenshot
+  platform: string;
+  dateRange: string; // Used for display only, pulled from date in FE logic later
   basePay: number;
   bonus: number;
-  incentives: number;
-  penalties: number;
-  totalDeductions: number;
-  totalPayout: number; // The final amount paid to the worker
+  distancePay: number; // New field from backend
+  penalties: Penalty[]; // Array structure from backend
+  totalPayout: number; // The final amount paid to the worker (BE: total)
 }
 
 interface ExtractedFieldsReviewProps {
   // Data received from the OCR/AI extraction process
-  extracted: ExtractedData;
-  // Function to call when the user confirms the data, passing the final, edited data
-  onConfirm: (data: ExtractedData) => void;
-  // Loading state indication
-  isLoading: boolean;
+  extracted: Omit<ExtractedData, 'dateRange'> & { date?: string }; // Extracted data from the BE
+  // The ID of the record saved in the DB
+  recordId: string;
+  // Function to call for redirection/state update in the parent
+  onAuditStart: () => void;
+  onAuditComplete: (auditRecordId: string) => void;
 }
 
-export default function ExtractedFieldsReview({ extracted, onConfirm, isLoading }: ExtractedFieldsReviewProps) {
-  // Use state to manage the potentially edited data
-  const [editedData, setEditedData] = useState<ExtractedData>(extracted);
-  const [localMessage, setLocalMessage] = useState<{ type: 'error'; text: string } | null>(null);
+export default function ExtractedFieldsReview({ extracted, recordId, onAuditStart, onAuditComplete }: ExtractedFieldsReviewProps) {
+  // Map the backend's structure to the frontend's editable state
+  const initialData: ExtractedData = useMemo(() => ({
+    platform: extracted.platform || 'unknown',
+    dateRange: extracted.date || 'N/A',
+    basePay: extracted.basePay || 0,
+    bonus: extracted.bonus || 0,
+    distancePay: extracted.distancePay || 0,
+    penalties: extracted.penalties || [],
+    totalPayout: extracted.total || 0,
+  }), [extracted]);
 
-  // Initialize state when the component mounts or 'extracted' prop changes
-  useEffect(() => {
-    setEditedData(extracted);
-  }, [extracted]);
+  const [editedData, setEditedData] = useState<ExtractedData>(initialData);
+  const [localMessage, setLocalMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+
 
   // Handle changes in input fields
-  const handleFieldChange = (field: keyof ExtractedData, value: string) => {
+  const handleFieldChange = (field: keyof Omit<ExtractedData, 'penalties' | 'dateRange' | 'platform'>, value: string) => {
     setLocalMessage(null);
     
-    // Only allow numeric fields to update, and convert string to number
-    if (typeof editedData[field] === 'number') {
-      const numValue = parseFloat(value);
-      if (isNaN(numValue) && value !== '') {
-        setLocalMessage({ type: 'error', text: 'Please enter a valid number for monetary fields.' });
-        return;
+    const numValue = parseFloat(value);
+    if (isNaN(numValue) && value !== '') {
+      setLocalMessage({ type: 'error', text: 'Please enter a valid number for monetary fields.' });
+      return;
+    }
+    
+    setEditedData(prev => ({
+      ...prev,
+      [field]: numValue || 0, // Default to 0 if input is empty or just '.'
+    }));
+  };
+
+  // Handle changes in penalty amounts (simple case: only one penalty)
+  const handlePenaltyChange = (value: string) => {
+    setLocalMessage(null);
+    const numValue = parseFloat(value);
+    
+    if (isNaN(numValue) && value !== '') {
+      setLocalMessage({ type: 'error', text: 'Please enter a valid number for penalty amount.' });
+      return;
+    }
+    
+    const amount = Math.abs(numValue) || 0;
+
+    setEditedData(prev => ({
+      ...prev,
+      // Assuming only one penalty is editable for simplicity, or sum all into one editable field
+      penalties: [{ type: prev.penalties[0]?.type || 'Deduction', amount: amount }]
+    }));
+  };
+
+  // Calculate the total amount earned (before deductions) and final net pay
+  const totalPenaltyAmount = editedData.penalties.reduce((sum, p) => sum + p.amount, 0);
+  const calculatedTotalGross = editedData.basePay + editedData.bonus + editedData.distancePay;
+  const calculatedNetPay = calculatedTotalGross - totalPenaltyAmount;
+
+  // Function to call the audit API
+  const startAudit = async () => {
+    setLocalMessage(null);
+    setIsLoading(true);
+    onAuditStart();
+
+    // Prepare the data payload for the audit API
+    // The Audit API expects the recordId OR the full parsed data
+    const payload = {
+      recordId: recordId, // Use the stored record
+      parsedData: { 
+        // Pass the corrected/edited data as a potential override to the stored snapshot
+        platform: editedData.platform,
+        total: editedData.totalPayout,
+        basePay: editedData.basePay,
+        bonus: editedData.bonus,
+        distancePay: editedData.distancePay,
+        penalties: editedData.penalties,
+      },
+      // You could add worker context here if you had it
+      context: {},
+    };
+
+    try {
+      const res = await fetch("/api/audit", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || `Audit failed with status: ${res.status}`);
       }
-      setEditedData(prev => ({
-        ...prev,
-        [field]: numValue || 0, // Default to 0 if input is empty or just '.'
+
+      const data = await res.json();
+      
+      // Temporary persistence for demonstration only (SHOULD BE REPLACED by a proper state management)
+      localStorage.setItem("extractedResult", JSON.stringify({
+        ...data.audit,
+        platform: editedData.platform,
+        totalEarnings: editedData.totalPayout, // Map BE's total to FE's expected totalEarnings
+        auditTimestamp: new Date().toISOString()
       }));
-    } else {
-      // Handle string fields if needed (e.g., dateRange, platform)
-      setEditedData(prev => ({
-        ...prev,
-        [field]: value,
-      }));
+
+      setLocalMessage({ type: 'success', text: 'Audit successful. Redirecting to dashboard...' });
+      
+      // Delay redirection briefly to show success message
+      setTimeout(() => {
+        onAuditComplete(data.auditRecordId);
+      }, 1000);
+
+    } catch (error) {
+      console.error("Audit Error:", error);
+      setLocalMessage({ type: 'error', text: `Failed to run audit: ${(error as Error).message}` });
+      setIsLoading(false);
     }
   };
-  
-  // Calculate the total amount earned (before deductions) and final net pay
-  const calculatedTotalGross = editedData.basePay + editedData.bonus + editedData.incentives;
-  const calculatedNetPay = calculatedTotalGross - editedData.totalDeductions;
 
 
   // Component for a reusable editable field
-  const EditableField = ({ label, field, value }: { label: string, field: keyof ExtractedData, value: number }) => (
+  const EditableField = ({ label, field, value, onChange }: { label: string, field: keyof ExtractedData, value: number, onChange: (value: string) => void }) => (
     <div className="flex justify-between items-center py-2 border-b border-gray-100">
       <label htmlFor={field} className="text-sm font-medium text-gray-700 w-1/2">
         {label}
@@ -75,7 +160,7 @@ export default function ExtractedFieldsReview({ extracted, onConfirm, isLoading 
           type="number"
           step="0.01"
           value={value}
-          onChange={(e) => handleFieldChange(field, e.target.value)}
+          onChange={(e) => onChange(e.target.value)}
           className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition-colors text-right"
         />
       </div>
@@ -95,12 +180,12 @@ export default function ExtractedFieldsReview({ extracted, onConfirm, isLoading 
       <div className="text-center border-b pb-4">
         <h2 className="text-2xl font-bold text-gray-900">Review Extracted Earning Data</h2>
         <p className="text-gray-600 mt-1">
-          The fields below were extracted from your screenshot. Please review and correct any values before proceeding.
+          The fields below were extracted from your screenshot. Review and correct any values before proceeding to the compliance audit.
         </p>
       </div>
 
       {localMessage && (
-        <div className="p-3 rounded-lg text-sm bg-red-100 text-red-700 border border-red-300" role="alert">
+        <div className={`p-3 rounded-lg text-sm ${localMessage.type === 'error' ? 'bg-red-100 text-red-700 border border-red-300' : 'bg-green-100 text-green-700 border border-green-300'}`} role="alert">
           {localMessage.text}
         </div>
       )}
@@ -114,9 +199,24 @@ export default function ExtractedFieldsReview({ extracted, onConfirm, isLoading 
       {/* Editable Earning Fields */}
       <div className="space-y-1">
         <h3 className="text-lg font-semibold text-gray-800 mb-2">Earnings Components</h3>
-        <EditableField label="Base Pay / Trip Pay" field="basePay" value={editedData.basePay} />
-        <EditableField label="Incentives" field="incentives" value={editedData.incentives} />
-        <EditableField label="Bonus / Tips" field="bonus" value={editedData.bonus} />
+        <EditableField 
+          label="Base Pay / Trip Pay" 
+          field="basePay" 
+          value={editedData.basePay} 
+          onChange={(v) => handleFieldChange('basePay', v)}
+        />
+        <EditableField 
+          label="Bonus / Tips" 
+          field="bonus" 
+          value={editedData.bonus} 
+          onChange={(v) => handleFieldChange('bonus', v)}
+        />
+        <EditableField 
+          label="Distance / Fuel Pay" 
+          field="distancePay" 
+          value={editedData.distancePay} 
+          onChange={(v) => handleFieldChange('distancePay', v)}
+        />
       </div>
       
       {/* Calculated Gross */}
@@ -129,14 +229,19 @@ export default function ExtractedFieldsReview({ extracted, onConfirm, isLoading 
       {/* Editable Deduction Fields */}
       <div className="space-y-1 border-t pt-4">
         <h3 className="text-lg font-semibold text-gray-800 mb-2">Deductions & Charges</h3>
-        <EditableField label="Penalties / Fines" field="penalties" value={editedData.penalties} />
-        <EditableField label="Other Total Deductions" field="totalDeductions" value={editedData.totalDeductions} />
+        <EditableField 
+          label="Total Penalties / Fines" 
+          field="penalties" 
+          value={totalPenaltyAmount} 
+          onChange={handlePenaltyChange}
+        />
+        {/* Removed 'Other Total Deductions' to simplify model alignment */}
       </div>
 
       {/* Final Summary Check */}
       <div className="space-y-2 border-t pt-4">
          <StaticField 
-            label="Calculated Net Pay (Gross - Deductions)" 
+            label="Calculated Net Pay (Gross - Penalties)" 
             value={`₹${calculatedNetPay.toFixed(2)}`} 
             isHighlight={true} 
         />
@@ -145,12 +250,15 @@ export default function ExtractedFieldsReview({ extracted, onConfirm, isLoading 
             value={`₹${editedData.totalPayout.toFixed(2)}`} 
             isHighlight={true} 
         />
+        <p className="text-sm text-gray-500 pt-1 text-center">
+            Note: The Audit Engine will check if the difference between the two Net Pay values is justified.
+        </p>
       </div>
 
       {/* Action Button */}
       <div className="pt-4">
         <button
-          onClick={() => onConfirm(editedData)}
+          onClick={startAudit}
           disabled={isLoading}
           className={`w-full flex items-center justify-center px-8 py-3 text-lg font-semibold text-white rounded-lg shadow-md transition-all duration-200 
             ${isLoading

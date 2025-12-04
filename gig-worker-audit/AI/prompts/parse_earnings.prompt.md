@@ -12,13 +12,13 @@
     },
     {
       "rule": "Penalties Mapping",
-      "description": "Penalties must be structured as an object containing the specific 'type' of deduction and the associated 'amount' as a positive number. If multiple penalties exist, they should be aggregated or represented in a structured array (for advanced parsing).",
+      "description": "Penalties must be structured as an array of objects, where each object contains the specific 'type' of deduction and the associated 'amount' as a positive number.",
       "field_key": "penalties",
-      "format": "{ \"type\": \"string\", \"amount\": \"number\" }"
+      "format": "[{ \"type\": \"string\", \"amount\": \"number\" }]"
     },
     {
       "rule": "Date and Platform Extraction",
-      "description": "Extract the platform name (e.g., Swiggy, Uber) and parse the most recent date from the text (using YYYY-MM-DD format is recommended). Ratings should be converted to a single float if possible (e.g., '4.7/5' becomes 4.7).",
+      "description": "Extract the platform name (e.g., Swiggy, Uber) and parse the most recent date from the text (using YYYY-MM-DD format is recommended). Ratings should be extracted as an array of rating objects, or a single float if only one is found.",
       "field_keys": ["platform", "date", "ratings"]
     }
   ],
@@ -40,11 +40,18 @@
       "basePay": 1250.00,
       "bonus": 150.00,
       "distancePay": 350.50,
-      "penalties": {
-        "type": "Safety Fine Deduction",
-        "amount": 25.00
-      },
-      "ratings": 4.5
+      "penalties": [
+        {
+          "type": "Safety Fine Deduction",
+          "amount": 25.00
+        }
+      ],
+      "ratings": [
+        {
+          "date": null,
+          "rating": 4.5
+        }
+      ]
     }
   }
 }

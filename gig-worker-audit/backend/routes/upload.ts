@@ -4,38 +4,13 @@ import formidable from "formidable";
 import fs from "fs";
 import path from "path";
 
-// TODO: Replace with actual utility for uploading to Cloudinary/S3/etc.
-// export const uploadToCloudinary = async (filepath: string, filename: string): Promise<string> => { /* ... */ };
-const uploadToCloudinary = async (filepath: string, filename: string): Promise<string> => {
-    // --- TODO: REAL IMPLEMENTATION: Upload 'filepath' content to Cloudinary (or S3) and return the public URL ---
-    // Example using Cloudinary SDK:
-    // const result = await cloudinary.uploader.upload(filepath, { public_id: filename });
-    // return result.secure_url;
-    console.log(`Mock Uploading ${filename} from ${filepath} to Cloudinary...`);
-    return `https://mock-cdn.com/uploads/${filename}-${Date.now()}`;
-};
-
-// --- Mocked Services and Model for illustration ---
-// TODO: Ensure these imports point to your actual files
-// Assume ocrService: { extract: (url: string) => Promise<{ rawText: string }> }
-import { ocrService } from "../services/ocrService";
-// Assume parserService: { parse: (text: string, options?: { platform: string }) => Promise<any> }
-import { parserService } from "../services/parserService";
-// Assume EarningsRecord: { create: (data: any) => Promise<{ _id: string, [key: string]: any }> }
-// import EarningsRecord from "../models/EarningsRecord";
-const EarningsRecord = {
-    create: async (data: any) => {
-        console.log("Mock DB Save:", data);
-        return {
-            _id: "mock_record_" + Date.now(),
-            ...data
-        };
-    }
-};
-// Assume dbConnect: () => Promise<void>
-// import dbConnect from "../utils/dbConnect";
-const dbConnect = async () => { console.log("Mock DB Connect"); };
-// --- End Mocked Services and Model ---
+// --- REAL IMPORTS ---
+import { uploadToCloudinary } from "../utils/storage"; // Import the actual storage utility
+import { ocrService } from "../services/ocrService"; // Import the actual OCR service
+import { parserService } from "../services/parserService"; // Import the actual parser service
+import EarningsRecord from "../models/EarningsRecord"; // Import the actual EarningsRecord model
+import dbConnect from "../utils/dbConnect"; // Import the actual DB connection utility
+// --- End REAL IMPORTS ---
 
 
 /**
@@ -101,24 +76,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let fileUrl = "";
 
     // 3. File Storage Logic (Cloudinary vs. Local Fallback)
-    if (process.env.CLOUDINARY_URL) {
-      // Flow A: Upload to Cloudinary (or similar)
-      const filename = path.basename(file.originalFilename || file.newFilename || "upload");
-      fileUrl = await uploadToCloudinary(tempPath, filename);
-    } else {
-      // Flow B: Local Fallback (for development/testing)
-      // NOTE: In production serverless, this file may be inaccessible after the function ends.
-      const destDir = path.join(process.cwd(), "tmp");
-      const filename = path.basename(file.originalFilename || file.newFilename || `local_upload_${Date.now()}`);
-      const dest = path.join(destDir, filename);
+    // NOTE: Local fallback section removed as it is now handled by the imported `uploadToCloudinary` utility
+    // which handles both Cloudinary upload and local mock storage.
+    const filename = path.basename(file.originalFilename || file.newFilename || "upload");
+    fileUrl = await uploadToCloudinary(tempPath, filename);
 
-      fs.mkdirSync(destDir, { recursive: true });
-      fs.copyFileSync(tempPath, dest);
-
-      // This URL will only work if a local server is configured to serve /tmp
-      fileUrl = `/tmp/${filename}`; // Mock path for local access
-      console.log(`Local file saved to: ${dest}`);
-    }
 
     // 4. Process File: OCR and Parsing
     // Call OCR service to extract raw text
@@ -129,8 +91,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const parsed = await parserService.parse(rawText, { platform });
 
     // 5. Persist Earnings Record to DB
+    // NOTE: The code still saves a snapshot of the parsed data.
     const record = await EarningsRecord.create({
       platform,
+      // NOTE: We should probably link this record to a Worker, but Worker creation/lookup is not implemented in this flow.
       screenshotUrl: fileUrl,
       rawText: rawText.substring(0, 1000), // Save first 1000 chars of raw text
       parsedData: parsed,
@@ -139,6 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     // 6. Return Success Response
+    // We return the parsed data and the DB record ID for the next step (Review/Audit)
     return res.status(200).json({
       recordId: record._id,
       parsedData: parsed
@@ -147,16 +112,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (e: any) {
     // 7. Robust Error Handling
     console.error("Upload handler critical error:", e);
-    // Attempt to remove the temporary file if it still exists (optional cleanup)
-    if (req.method === "POST") { // Only run if a POST request was attempted
-        try {
-            // Check if formidable created temp files (formidable usually handles this, but good practice)
-            // Note: with formidable v3, file.filepath is the main temp path.
-            // fs.promises.unlink(file.filepath).catch(() => {});
-        } catch (cleanupError) {
-            console.warn("Cleanup failed:", cleanupError);
-        }
-    }
+    // Cleanup logic is generally handled within the `uploadToCloudinary` utility now.
     return res.status(500).json({ error: e?.message || "Internal server error during processing" });
   }
 }

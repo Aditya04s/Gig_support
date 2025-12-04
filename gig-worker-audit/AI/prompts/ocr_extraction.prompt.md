@@ -1,79 +1,69 @@
-You are an expert data extraction and parsing model. Your task is to analyze the provided raw OCR text, which originates from a gig-platform earnings screenshot, and extract the required financial and performance data into a STRICT JSON format.
+import { NextApiRequest, NextApiResponse } from "next";
+// Assuming Mongoose models are set up in a typical Next.js project structure
+// Replace these with actual imports based on your database setup (e.g., Firestore utilities)
+// For this example, we assume a MongoDB/Mongoose setup for structure demonstration.
+import dbConnect from "../utils/dbConnect"; 
+import AuditResultModel from "../models/AuditResult";
+import EarningsRecordModel from "../models/EarningsRecord";
+import { generatePDF } from "../../scripts/generate_pdf";
+import type { AuditResult, EarningsRecord } from "../types"; // Assuming types are defined
 
-OUTPUT MUST BE VALID JSON ONLY. Do not include any introductory or concluding text, explanations, or markdown fences (```json).
+/**
+ * API handler for POST /api/report
+ * Generates a PDF report based on an audit record ID.
+ */
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // 1. Method Check
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
-Input Data Processing Rules:
+  // 2. Input Validation
+  const { auditRecordId } = req.body;
 
-Strict Schema: Adhere strictly to the following JSON schema. Do not add any keys not listed below.
+  if (!auditRecordId || typeof auditRecordId !== 'string') {
+    return res.status(400).json({ error: "Missing or invalid auditRecordId in request body." });
+  }
 
-Missing Data: If a required field is not present or cannot be reliably extracted from the text, its value MUST be null.
+  try {
+    // 3. Database Connection
+    // NOTE: This assumes a traditional database connection (e.g., MongoDB). 
+    // If using Firebase/Firestore, this step would involve initializing the Firestore client.
+    await dbConnect(); 
 
-Monetary Fields (total, basePay, bonus, distancePay):
-
-Values must be returned as numbers (integers or floats).
-
-REMOVE all currency symbols (₹, $, €) and thousand separators (commas).
-
-If multiple amounts are present, the total should be the net amount paid or the highest amount explicitly labeled 'Total/Net Payable'.
-
-Date Field (date): Must be extracted and formatted as "YYYY-MM-DD".
-
-Penalties: Penalties must be returned as an array of objects.
-
-If only one penalty amount is visible without a type, use {"type": "Deduction", "amount": [the number]}.
-
-The amount must be a positive number.
-
-Ratings: Return an array of objects containing the date and the numerical rating (as a float). If the date is unavailable, use null.
-
-JSON Output Schema:
-
-{
-  "platform": "string | null",
-  "date": "YYYY-MM-DD" | null,
-  "total": "number | null",
-  "basePay": "number | null",
-  "bonus": "number | null",
-  "distancePay": "number | null",
-  "penalties": [
-    {
-      "type": "string | null",
-      "amount": "number"
+    // 4. Data Fetching
+    const audit: AuditResult | null = await AuditResultModel.findById(auditRecordId).lean();
+    
+    if (!audit) {
+      return res.status(404).json({ error: "Audit result not found for the provided ID." });
     }
-  ],
-  "ratings": [
-    {
-      "date": "YYYY-MM-DD" | null,
-      "rating": "number | null"
-    }
-  ]
+
+    // Fetch the original earnings record associated with the audit
+    const record: EarningsRecord | null = audit.recordId 
+      ? await EarningsRecordModel.findById(audit.recordId).lean() 
+      : null;
+
+    // 5. PDF Generation
+    // The generatePDF function is responsible for structuring the report content
+    const pdfBuffer: Buffer = await generatePDF({ audit, record });
+
+    // 6. Response Headers for Downloadable PDF
+    res.setHeader("Content-Type", "application/pdf");
+    // Force the browser to download the file with a specific filename
+    res.setHeader("Content-Disposition", `attachment; filename="gig-audit-report-${auditRecordId}.pdf"`);
+    // Set content length for better download predictability
+    res.setHeader("Content-Length", pdfBuffer.length); 
+
+    // 7. Send the PDF Buffer
+    res.send(pdfBuffer);
+    
+  } catch (e: unknown) {
+    const error = e as Error;
+    console.error(`[PDF_REPORT_ERROR]: Failed to generate report for ID ${auditRecordId}.`, error);
+    // 8. Error Handling
+    return res.status(500).json({ 
+      error: "Failed to generate report due to an internal server error.", 
+      details: error.message 
+    });
+  }
 }
-
-
-Example Output (Illustrative, replace values with extracted data):
-
-{
-  "platform": "Uber",
-  "date": "2024-05-20",
-  "total": 5235.50,
-  "basePay": 4500.00,
-  "bonus": 750.00,
-  "distancePay": null,
-  "penalties": [
-    {
-      "type": "Late Fee",
-      "amount": 15.00
-    }
-  ],
-  "ratings": [
-    {
-      "date": null,
-      "rating": 4.85
-    }
-  ]
-}
-
-
-Input OCR Text to Analyze:
-
-[Insert the raw OCR text here]

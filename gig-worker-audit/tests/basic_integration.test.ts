@@ -1,12 +1,21 @@
 import { parserService } from "../backend/services/parserService";
 
-// Define a simple interface to mock the expected output structure for type safety
+// Define the required structure based on backend/services/parserService.ts
+interface Penalty {
+  type?: string;
+  amount: number;
+}
+
 interface ParsedData {
-  total: number;
-  basePay: number;
-  bonus: number;
-  penalty: number;
-  // Assuming the parser also includes other necessary audit fields
+  platform?: string;
+  date?: string;
+  total?: number;
+  basePay?: number;
+  bonus?: number;
+  distancePay?: number;
+  penalties?: Penalty[]; // FIX: Must be an array of Penalty objects
+  ratings?: { date?: string; rating?: number }[];
+  rawText?: string;
 }
 
 describe("parserService - Integration Test", () => {
@@ -30,18 +39,21 @@ describe("parserService - Integration Test", () => {
     // Assert that key financial fields are defined and are of type 'number'
     expect(parsed.total).toBeDefined();
     expect(typeof parsed.total === "number").toBeTruthy();
-    
+    expect(parsed.total).toBe(420.50); // Deep verification
+
     expect(parsed.basePay).toBeDefined();
     expect(typeof parsed.basePay === "number").toBeTruthy();
+    expect(parsed.basePay).toBe(250.00);
 
     expect(parsed.bonus).toBeDefined();
     expect(typeof parsed.bonus === "number").toBeTruthy();
+    expect(parsed.bonus).toBe(100.00);
 
-    expect(parsed.penalty).toBeDefined();
-    expect(typeof parsed.penalty === "number").toBeTruthy();
-
-    // Optional: Assert the values for deep verification
-    // expect(parsed.total).toBe(420.50);
-    // expect(parsed.basePay).toBe(250.00);
+    // FIX: Assert on the penalties array and the total amount
+    expect(parsed.penalties).toBeDefined();
+    expect(Array.isArray(parsed.penalties)).toBeTruthy();
+    
+    const totalPenalty = (parsed.penalties || []).reduce((sum, p) => sum + p.amount, 0);
+    expect(totalPenalty).toBe(50.00);
   });
 });

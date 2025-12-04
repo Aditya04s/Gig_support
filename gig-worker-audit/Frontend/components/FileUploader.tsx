@@ -74,11 +74,6 @@ export default function FileUploader() {
     }
 
     setIsLoading(true);
-
-    // *** NOTE ON DATA PERSISTENCE: ***
-    // In a production environment, 'localStorage' is insufficient and disallowed.
-    // Data should be stored securely in a persistent database (e.g., Firestore) 
-    // after successful API processing. The current structure is for front-end demonstration.
     
     const formData = new FormData();
     formData.append("file", file);
@@ -94,16 +89,25 @@ export default function FileUploader() {
         throw new Error(`Upload failed with status: ${res.status}`);
       }
 
-      const data = await res.json();
+      // Response contains { recordId, parsedData }
+      const data = await res.json(); 
       
-      // Temporary persistence method for demonstration only (SHOULD BE REPLACED)
-      localStorage.setItem("extractedResult", JSON.stringify(data.result || { success: true, message: "Analysis complete." }));
+      // FIX: Save the necessary data for the Review page and redirect to the new flow
+      // The Review page needs the parsed data and the record ID for the audit API call.
+      localStorage.setItem("uploadResult", JSON.stringify({
+        recordId: data.recordId,
+        parsedData: data.parsedData
+      }));
 
-      setMessage({ type: 'success', text: 'Analysis successful. Redirecting...' });
+      // CLEAR OLD AUDIT RESULT
+      localStorage.removeItem("extractedResult");
+
+      setMessage({ type: 'success', text: 'Screenshot analyzed. Redirecting to review...' });
       
       // Delay redirection briefly to show success message
       setTimeout(() => {
-        router.push("/dashboard");
+        // FIX: Redirect to a new review page instead of the dashboard
+        router.push("/review");
       }, 1000);
 
     } catch (error) {
@@ -228,7 +232,7 @@ export default function FileUploader() {
               Analyzing Screenshot...
             </>
           ) : (
-            '3. Upload & Start Audit'
+            '3. Upload & Start Analysis'
           )}
         </button>
       </div>

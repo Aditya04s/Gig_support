@@ -25,9 +25,10 @@ export const ocrService = {
     const AI_API_KEY = process.env.AI_API_KEY;
 
     // --- MOCK/DEMO FALLBACK ---
-    if (!AI_API_KEY) {
-      console.warn("AI_API_KEY not set. Returning mocked OCR text for demonstration.");
-      // Mocked demo text - essential for testing the parsing service without a live API
+    // Keep a mock fallback for local development or when the AI key is missing/file is local.
+    if (!AI_API_KEY || fileUrl.startsWith('file://')) {
+      console.warn("AI_API_KEY not set or using local file. Returning mocked OCR text for demonstration.");
+      // Ensure the mock text is rich enough for parserService.ts to successfully parse.
       return {
         rawText: `
           Gig Platform Earnings Summary
@@ -36,17 +37,33 @@ export const ocrService = {
           Total Earnings: ₹420.00
           Base Pay: ₹250.00
           Incentive/Bonus: ₹100.00
-          Deduction/Penalty: ₹50.00
+          Distance Pay: ₹20.50
+          Deduction/Penalty: ₹50.00 (Safety Fine)
           Trip Count: 10
           Hours Logged: 2.5
+          Rating: 4.8/5
         `.trim(),
         metadata: { source: "mocked" },
       };
     }
 
-    // --- TODO: REAL IMPLEMENTATION: Integrate Gemini Pro Vision or other OCR API ---
-
-    // 1. Prepare the request body (specific to your chosen API)
-    // For Gemini Pro Vision (via SDK or REST API):
-    /*
-    const prompt = "Extract all text and numerical data from this earnings screenshot, including platform name, dates, all financial figures (base, bonus, penalty, total), and any work metrics (hours, trips). Output the raw text in a clean, easily pars
+    // --- REAL IMPLEMENTATION: Integrate AI/OCR API ---
+    // The image URL must be publicly accessible (e.g., a Cloudinary or S3 URL).
+    
+    const prompt = "Extract all text and numerical data from this gig worker earnings screenshot. List all financial figures (Total Earnings, Base Pay, Bonus, Penalties) and key context (Platform, Date/Period) in a clean, easily readable list format.";
+    
+    try {
+        // --- TODO: INSERT REAL AI/OCR API CALL LOGIC HERE ---
+        // This is where you would use an SDK (e.g., for Gemini) to send the prompt 
+        // and the `fileUrl` to the vision model and receive the extracted text.
+        
+        console.error("OCR Service is in placeholder mode. Real AI API implementation required.");
+        // Throw an error to indicate missing implementation if the mock path is skipped
+        throw new Error("OCR Service not fully implemented. Please configure AI_API_KEY and real vision API call logic.");
+        
+    } catch (error) {
+        console.error("AI/OCR extraction failed:", error);
+        throw new Error(`Failed to extract text from image: ${(error as Error).message}`);
+    }
+  },
+};
